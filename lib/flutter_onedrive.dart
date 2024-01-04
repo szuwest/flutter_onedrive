@@ -5,12 +5,14 @@ import 'dart:async';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_onedrive/drive_item.dart';
 import 'package:flutter_onedrive/onauth.dart';
 import 'package:flutter_onedrive/onedrive_response.dart';
 // import 'package:flutter_web_auth/flutter_web_auth.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert' show jsonDecode;
 
+import 'list_file_response.dart';
 import 'token.dart';
 
 class OneDrive with ChangeNotifier {
@@ -108,18 +110,18 @@ class OneDrive with ChangeNotifier {
     notifyListeners();
   }
 
-  Future<OneDriveResponse> pull(String remotePath, {bool isAppFolder = false}) async {
+  Future<OneDriveResponse> pull(String remotePath, {bool isAppFolder = true}) async {
     final accessToken = await _tokenManager.getAccessToken();
     if (accessToken == null) {
-      return OneDriveResponse(message: "Null access token", bodyBytes: Uint8List(0));
+      throw Exception('No token found, please take a authentication first.');
     }
 
     /// We need to call this method to create app folder and make sure it exists.
     /// Otherwise, we will get "Access Denied - 403".
     /// https://learn.microsoft.com/en-us/onedrive/developer/rest-api/concepts/special-folders-appfolder?view=odsp-graph-online
-    if (isAppFolder) {
-      await getMetadata(remotePath, isAppFolder: isAppFolder);
-    }
+    // if (isAppFolder) {
+    //   await getMetadata(remotePath, isAppFolder: isAppFolder);
+    // }
 
     final url = Uri.parse("${apiEndpoint}me/drive/${_getRootFolder(isAppFolder)}:$remotePath:/content");
 
@@ -157,19 +159,19 @@ class OneDrive with ChangeNotifier {
     }
   }
 
-  Stream<UploadStatus> pushStream(Uint8List bytes, String remotePath, {bool isAppFolder = false}) async* {
+  Stream<UploadStatus> pushStream(Uint8List bytes, String remotePath, {bool isAppFolder = true}) async* {
     final accessToken = await _tokenManager.getAccessToken();
     if (accessToken == null) {
       // No access token
-      throw Exception("Token is null");
+      throw Exception('No token found, please take a authentication first.');
     }
 
     /// We need to call this method to create app folder and make sure it exists.
     /// Otherwise, we will get "Access Denied - 403".
     /// https://learn.microsoft.com/en-us/onedrive/developer/rest-api/concepts/special-folders-appfolder?view=odsp-graph-online
-    if (isAppFolder) {
-      await getMetadata(remotePath, isAppFolder: isAppFolder);
-    }
+    // if (isAppFolder) {
+    //   await getMetadata(remotePath, isAppFolder: isAppFolder);
+    // }
 
     const int pageSize = 1024 * 1024; // page size
     final int maxPage = (bytes.length / pageSize.toDouble()).ceil(); // total pages
@@ -179,6 +181,7 @@ class OneDrive with ChangeNotifier {
     var now = DateTime.now();
     var url =
         Uri.parse("$apiEndpoint/me/drive/${_getRootFolder(isAppFolder)}:$remotePath:/createUploadSession");
+    debugPrint('url = $url');
     var resp = await http.post(
       url,
       headers: {"Authorization": "Bearer $accessToken"},
@@ -190,7 +193,7 @@ class OneDrive with ChangeNotifier {
       final Map<String, dynamic> respJson = jsonDecode(resp.body);
       final String uploadUrl = respJson["uploadUrl"];
       url = Uri.parse(uploadUrl);
-
+      debugPrint('url = $url');
 // use upload url to upload
       for (var pageIndex = 0; pageIndex < maxPage; pageIndex++) {
         now = DateTime.now();
@@ -237,20 +240,20 @@ class OneDrive with ChangeNotifier {
     }
   }
 
-  Future<OneDriveResponse> push(Uint8List bytes, String remotePath, {bool isAppFolder = false}) async {
+  Future<OneDriveResponse> push(Uint8List bytes, String remotePath, {bool isAppFolder = true}) async {
     final accessToken = await _tokenManager.getAccessToken();
     if (accessToken == null) {
       // No access token
-      return OneDriveResponse(message: "Null access token.");
+      throw Exception('No token found, please take a authentication first.');
     }
 
     try {
       /// We need to call this method to create app folder and make sure it exists.
       /// Otherwise, we will get "Access Denied - 403".
       /// https://learn.microsoft.com/en-us/onedrive/developer/rest-api/concepts/special-folders-appfolder?view=odsp-graph-online
-      if (isAppFolder) {
-        await getMetadata(remotePath, isAppFolder: isAppFolder);
-      }
+      // if (isAppFolder) {
+      //   await getMetadata(remotePath, isAppFolder: isAppFolder);
+      // }
 
       const int pageSize = 1024 * 1024; // page size
       final int maxPage = (bytes.length / pageSize.toDouble()).ceil(); // total pages
@@ -260,6 +263,7 @@ class OneDrive with ChangeNotifier {
       var now = DateTime.now();
       var url =
           Uri.parse("$apiEndpoint/me/drive/${_getRootFolder(isAppFolder)}:$remotePath:/createUploadSession");
+      debugPrint('url = $url');
       var resp = await http.post(
         url,
         headers: {"Authorization": "Bearer $accessToken"},
@@ -271,7 +275,7 @@ class OneDrive with ChangeNotifier {
         final Map<String, dynamic> respJson = jsonDecode(resp.body);
         final String uploadUrl = respJson["uploadUrl"];
         url = Uri.parse(uploadUrl);
-
+        debugPrint('url = $url');
 // use upload url to upload
         for (var pageIndex = 0; pageIndex < maxPage; pageIndex++) {
           now = DateTime.now();
@@ -326,32 +330,143 @@ class OneDrive with ChangeNotifier {
     return isAppFolder ? _appRootFolder : _defaultRootFolder;
   }
 
-  Future<Uint8List?> getMetadata(String remotePath, {bool isAppFolder = false}) async {
+  Future<DriveItem> getMetadata(String remotePath, {bool isAppFolder = true}) async {
     final accessToken = await _tokenManager.getAccessToken();
     if (accessToken == null) {
-      return Uint8List(0);
+      throw Exception('No token found, please take a authentication first.');
     }
 
-    final url = Uri.parse("${apiEndpoint}me/drive/${_getRootFolder(isAppFolder)}");
+    final Uri url;
+    if (remotePath.isEmpty) {
+      url = Uri.parse("${apiEndpoint}me/drive/${_getRootFolder(isAppFolder)}");
+    } else {
+      url = Uri.parse("${apiEndpoint}me/drive/${_getRootFolder(isAppFolder)}:$remotePath");
+    }
+    debugPrint('url = $url');
+    final resp = await http.get(
+      url,
+      headers: {"Authorization": "Bearer $accessToken"},
+    );
+    debugPrint("# OneDrive -> metadata: path=$remotePath, ${resp.statusCode}\n# Body: ${resp.body}");
+    if (resp.statusCode == 200 || resp.statusCode == 201) {
+      return DriveItem.fromJson(resp.body);
+    } else if (resp.statusCode == 404) {
+      throw Exception("File not found.");
+    }
+    throw Exception("Request failed, code=${resp.statusCode}");
+  }
 
-    try {
-      final resp = await http.get(
-        url,
-        headers: {"Authorization": "Bearer $accessToken"},
-      );
+  /// remotePath: the path of the file or folder to be listed. or empty string to list app folder.
+  Future<ListFileResponse> listFiles(String remotePath, {bool isAppFolder = true}) async {
+    final accessToken = await _tokenManager.getAccessToken();
+    if (accessToken == null) {
+      throw Exception('No token found, please take a authentication first.');
+    }
+    final Uri url;
+    if (remotePath.isEmpty) {
+      url = Uri.parse("${apiEndpoint}me/drive/${_getRootFolder(isAppFolder)}/children");
+    } else {
+      url = Uri.parse("${apiEndpoint}me/drive/${_getRootFolder(isAppFolder)}:$remotePath:/children");
+    }
+    debugPrint('url = $url');
+    final resp = await http.get(
+      url,
+      headers: {"Authorization": "Bearer $accessToken"},
+    );
+    debugPrint("# OneDrive -> listFiles: path=$remotePath, ${resp.statusCode}\n# Body: ${resp.body}");
+    if (resp.statusCode == 200 || resp.statusCode == 201) {
+      return ListFileResponse.fromJson(resp.body);
+    }
+    throw Exception("Request failed, code=${resp.statusCode}");
+  }
 
-      if (resp.statusCode == 200 || resp.statusCode == 201) {
-        return resp.bodyBytes;
-      } else if (resp.statusCode == 404) {
-        return Uint8List(0);
+  Future<ListFileResponse> listAppFolderFiles() async {
+    return listFiles('', isAppFolder: true);
+  }
+
+  Future<List<DriveItem>> listAllItems(String remotePath, {bool isAppFolder = true}) async {
+    ListFileResponse response = await listFiles(remotePath, isAppFolder: isAppFolder);
+    List<DriveItem> items = response.value ?? [];
+    List<DriveItem> allItems = [];
+    allItems.addAll(items);
+    while(response.nextLink != null) {
+      final accessToken = await _tokenManager.getAccessToken();
+      try {
+        final resp = await http.get(
+          Uri.parse(response.nextLink!),
+          headers: {"Authorization": "Bearer $accessToken"},
+        );
+        if (resp.statusCode == 200 || resp.statusCode == 201) {
+          response = ListFileResponse.fromJson(resp.body);
+          final nextItems = response.value;
+          if (nextItems != null) {
+            allItems.addAll(nextItems);
+          }
+        } else {
+          response.nextLink = null;
+        }
+      } catch (err) {
+        debugPrint("# OneDrive -> listAllItems: $err");
+        response.nextLink = null;
       }
-
-      debugPrint("# OneDrive -> metadata: ${resp.statusCode}\n# Body: ${resp.body}");
-    } catch (err) {
-      debugPrint("# OneDrive -> metadata: $err");
     }
+    return allItems;
+  }
 
-    return null;
+  Future<DriveItem> createFolder(String folderName, {String? parentPath, bool isAppFolder = true}) async {
+    final accessToken = await _tokenManager.getAccessToken();
+    if (accessToken == null) {
+      throw Exception('No token found, please take a authentication first.');
+    }
+    final Uri url;
+    if (parentPath == null || parentPath.isEmpty) {
+      url = Uri.parse("${apiEndpoint}me/drive/${_getRootFolder(isAppFolder)}/children");
+    } else {
+      url = Uri.parse("${apiEndpoint}me/drive/${_getRootFolder(isAppFolder)}:$parentPath:/children");
+    }
+    debugPrint('url = $url');
+    final resp = await http.post(
+      url,
+      headers: {
+        "Authorization": "Bearer $accessToken",
+        "Content-Type": "application/json",
+      },
+      body: jsonEncode({"name": folderName, "folder": {}}),
+    );
+    debugPrint("# OneDrive -> createFolder: parentPath=$parentPath, folderName=$folderName, ${resp.statusCode}\n# Body: ${resp.body}");
+    if (resp.statusCode == 200 || resp.statusCode == 201) {
+      return DriveItem.fromJson(resp.body);
+    }
+    throw Exception("Request failed, code=${resp.statusCode}");
+  }
+
+  Future<OneDriveResponse> deleteFile(String remotePath, {bool isAppFolder = true}) async {
+    final accessToken = await _tokenManager.getAccessToken();
+    if (accessToken == null) {
+      throw Exception('No token found, please take a authentication first.');
+    }
+    final Uri url = Uri.parse("${apiEndpoint}me/drive/${_getRootFolder(isAppFolder)}:$remotePath");
+    debugPrint('url = $url');
+    final resp = await http.delete(
+      url,
+      headers: {"Authorization": "Bearer $accessToken"},
+    );
+    debugPrint("# OneDrive -> deleteFile: path=$remotePath, ${resp.statusCode}\n# Body: ${resp.body}");
+    if (resp.statusCode == 200 || resp.statusCode == 201 || resp.statusCode == 204) {
+      return OneDriveResponse(
+          statusCode: resp.statusCode,
+          body: resp.body,
+          message: "Delete file successfully.",
+          bodyBytes: null,
+          isSuccess: true);
+    } else if (resp.statusCode == 404) {
+      return OneDriveResponse(
+          statusCode: resp.statusCode,
+          body: resp.body,
+          message: "File not found.",
+          bodyBytes: Uint8List(0));
+    }
+    throw Exception("Request failed, code=${resp.statusCode}");
   }
 }
 
